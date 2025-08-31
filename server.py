@@ -1,298 +1,262 @@
-from __future__ import annotations
-from flask import Flask, request, jsonify, send_file, url_for
-from datetime import datetime
-import os, uuid
-from typing import Literal, List, Tuple
-
-# --------- PDF: ReportLab ----------
+from flask import Flask, request, jsonify, send_from_directory, url_for
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import mm
+import os
+import datetime
+import uuid
 
-SpecialT = Literal["Urlaub", "Krank", "Feiertag", None]
+WOCHENTAGE_DE = {
+    0: "Montag",
+    1: "Dienstag",
+    2: "Mittwoch",
+    3: "Donnerstag",
+    4: "Freitag",
+    5: "Samstag",
+    6: "Sonntag"
+}
 
-# ======= Layout Konstanten (aus deinem Backup, komprimiert) =======
-# Tagesblatt
-TB_TITLE_LEFT = "Arbeitstagebuch"
-TB_FOOTER_RIGHT = "(c)2025 – Arbeitstagebuch_UM"
-TB_LINE_THICK = 0.5
-TB_FONT_REG = "Helvetica"
-TB_FONT_BOLD = "Helvetica-Bold"
-TB_SIZE_HEADER = 13
-TB_SIZE_WEEK = 11
-TB_SIZE_TEXT = 10.0
-TB_SIZE_VALUE = 11.5
-TB_SIZE_SECTION = 11.5
-TB_SIZE_FOOTER = 9.0
-TB_MARGIN_L = 20 * mm
-TB_MARGIN_R = 20 * mm
-TB_MARGIN_T = 18 * mm
-TB_MARGIN_B = 18 * mm
-TB_BLOCK_SHIFT_X = 20 * mm
-TB_BLOCK_SHIFT_Y = 3 * mm
+WOCHENTAGE_KURZ_DE = {
+    "Mo": "Montag",
+    "Di": "Dienstag",
+    "Mi": "Mittwoch",
+    "Do": "Donnerstag",
+    "Fr": "Freitag",
+    "Sa": "Samstag",
+    "So": "Sonntag"
+}
 
-# Wochenübersicht
-W_TITLE_LEFT = "Wochenübersicht"
-W_FOOTER_RIGHT = "(c)2025 – Arbeitstagebuch_UM"
-W_LINE_THICK = 0.5
-W_FONT_REG = "Helvetica"
-W_FONT_BOLD = "Helvetica-Bold"
-W_SIZE_HEADER = 13
-W_SIZE_WEEK = 11
-W_SIZE_TEXT = 10.5
-W_SIZE_FOOTER = 9.0
-W_MARGIN_L = 20 * mm
-W_MARGIN_R = 20 * mm
-W_MARGIN_T = 18 * mm
-W_MARGIN_B = 18 * mm
-W_BLOCK_SHIFT_X = 20 * mm
-W_WEEKLY_TARGET = 40.0
-DAY_ORDER = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
+app = Flask(__name__)
+OUTPUT_DIR = "files"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# ======= PDF-Helfer =======
-def _tb_header_footer(c: canvas.Canvas, kw_label: str, page_num: int) -> float:
-    PAGE_W, PAGE_H = A4
-    header_y = PAGE_H - TB_MARGIN_T
-    c.setFont(TB_FONT_BOLD, TB_SIZE_HEADER)
-    c.drawString(TB_MARGIN_L, header_y, TB_TITLE_LEFT)
-    c.setFont(TB_FONT_REG, TB_SIZE_WEEK)
-    c.drawRightString(PAGE_W - TB_MARGIN_R, header_y, kw_label)
-    c.setLineWidth(TB_LINE_THICK)
-    c.line(TB_MARGIN_L, header_y - 3 * mm, PAGE_W - TB_MARGIN_R, header_y - 3 * mm)
-    c.setFont(TB_FONT_REG, TB_SIZE_FOOTER)
-    c.drawString(TB_MARGIN_L, TB_MARGIN_B, f"Seite {page_num}")
-    c.drawRightString(PAGE_W - TB_MARGIN_R, TB_MARGIN_B, TB_FOOTER_RIGHT)
-    return header_y
+API_KEY = os.getenv("ATB_API_KEY", "mein-super-key")
 
-def _w_header_footer(c: canvas.Canvas, week_label: str, page_num: int) -> float:
-    PAGE_W, PAGE_H = A4
-    header_y = PAGE_H - W_MARGIN_T
-    c.setFont(W_FONT_BOLD, W_SIZE_HEADER)
-    c.drawString(W_MARGIN_L, header_y, W_TITLE_LEFT)
-    c.setFont(W_FONT_REG, W_SIZE_WEEK)
-    c.drawRightString(PAGE_W - W_MARGIN_R, header_y, week_label)
-    c.setLineWidth(W_LINE_THICK)
-    c.line(W_MARGIN_L, header_y - 3 * mm, PAGE_W - W_MARGIN_R, header_y - 3 * mm)
-    c.setFont(W_FONT_REG, W_SIZE_FOOTER)
-    c.drawString(W_MARGIN_L, W_MARGIN_B, f"Seite {page_num}")
-    c.drawRightString(PAGE_W - W_MARGIN_R, W_MARGIN_B, W_FOOTER_RIGHT)
-    return header_y
 
-def _format_kw(dt: datetime) -> str:
-    kw = dt.isocalendar()[1]
-    return f"KW {kw} – {dt.year}"
+def auth_ok(req):
+    auth = req.headers.get("Authorization", "")
+    return auth == f"Bearer {API_KEY}"
 
-# ======= Generatoren =======
-def generate_tagesblatt(path: str, datum: datetime, start: str, stop: str,
-                        pause: float, taetigkeiten: List[str], kw_label: str | None) -> str:
-    c = canvas.Canvas(path, pagesize=A4)
-    PAGE_W, PAGE_H = A4
-    header_y = _tb_header_footer(c, kw_label or _format_kw(datum), 1)
 
-    # Zeiten berechnen
-    def _parse(t: str):
-        t = t.replace(" Uhr", "").strip()
-        hh, mm = t.split(":")
-        return int(hh), int(mm)
-    sh, sm = _parse(start); eh, em = _parse(stop)
-    gesamt = (eh + em/60.0) - (sh + sm/60.0)
-    arbeit = max(0.0, gesamt - float(pause))
-    ueber = arbeit - 8.0
+def create_tagesblatt_pdf(filename, datum, start, stop, pause, arbeitszeit, gesamtzeit, taetigkeiten, kw_label):
+    c = canvas.Canvas(filename, pagesize=A4)
+    width, height = A4
 
-    value_x = PAGE_W - TB_MARGIN_R - 40 * mm
-    y = header_y - 15 * mm - TB_BLOCK_SHIFT_Y
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(20 * mm, height - 20 * mm, "Arbeitstagebuch")
+    c.setFont("Helvetica", 12)
+    c.drawRightString(width - 20 * mm, height - 20 * mm, kw_label)
 
-    def row(label: str, value: str, bold=False):
-        nonlocal y
-        c.setFont(TB_FONT_REG, TB_SIZE_TEXT)
-        c.drawString(TB_MARGIN_L + TB_BLOCK_SHIFT_X, y, label)
-        c.setFont(TB_FONT_BOLD if bold else TB_FONT_REG, TB_SIZE_VALUE)
-        c.drawRightString(value_x, y, value)
-        y -= 6 * mm
+    c.line(20 * mm, height - 22 * mm, width - 20 * mm, height - 22 * mm)
 
-    row("Datum:", datum.strftime("%A, %d.%m.%Y"))
-    row("Start:", start)
-    row("Stopp:", stop)
-    row("Arbeitszeit:", f"{arbeit:.1f} Std.", bold=True)
-    row("Überstunden:", f"{ueber:+.1f} Std.", bold=True)
-    row("Gesamtzeit:", f"{gesamt:.1f} Std.", bold=True)
+    date_obj = datetime.datetime.strptime(datum, "%Y-%m-%d")
+    weekday_index = date_obj.weekday()
+    weekday_de = WOCHENTAGE_DE[weekday_index]
+    date_str = date_obj.strftime("%d.%m.%Y")
 
-    y -= 2 * mm
-    c.setLineWidth(TB_LINE_THICK)
-    c.line(TB_MARGIN_L, y, PAGE_W - TB_MARGIN_R, y)
+    c.setFont("Helvetica", 11)
+    c.drawString(30 * mm, height - 40 * mm, f"Datum:      {weekday_de}, {date_str}")
+    c.drawString(30 * mm, height - 50 * mm, f"Start:      {start}")
+    c.drawString(30 * mm, height - 60 * mm, f"Stopp:      {stop}")
+    c.drawString(30 * mm, height - 70 * mm, f"Arbeitszeit: {arbeitszeit:.1f} Std.")
 
-    y -= 8 * mm
-    c.setFont(TB_FONT_BOLD, TB_SIZE_SECTION)
-    c.drawString(TB_MARGIN_L + TB_BLOCK_SHIFT_X, y, "Tätigkeiten:")
-    y -= 7 * mm
-    c.setFont(TB_FONT_REG, TB_SIZE_TEXT)
-    for task in taetigkeiten[:36]:
-        c.drawString(TB_MARGIN_L + TB_BLOCK_SHIFT_X, y, f"• {task}")
-        y -= 6 * mm
+    if weekday_index == 6:
+        c.drawString(30 * mm, height - 80 * mm, f"Gesamtzeit: {gesamtzeit:.1f} Std. (Sonntagsstunden mit %!)")
+    else:
+        c.drawString(30 * mm, height - 80 * mm, f"Gesamtzeit: {gesamtzeit:.1f} Std.")
 
+    c.line(20 * mm, height - 90 * mm, width - 20 * mm, height - 90 * mm)
+
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(30 * mm, height - 105 * mm, "Tätigkeiten:")
+    c.setFont("Helvetica", 11)
+
+    y = height - 115 * mm
+    for taetigkeit in taetigkeiten:
+        c.drawString(40 * mm, y, f"• {taetigkeit}")
+        y -= 7 * mm
+
+    c.setFont("Helvetica", 9)
+    c.drawString(20 * mm, 15 * mm, "Seite 1")
+    c.drawRightString(width - 20 * mm, 15 * mm, "(c)2025 – Arbeitstagebuch_UM")
+
+    c.showPage()
     c.save()
-    return path
 
-def generate_woche(path: str, kw_label: str, week_data: List[Tuple[str, float|None, SpecialT]],
-                   created_date: datetime | None = None) -> str:
-    c = canvas.Canvas(path, pagesize=A4)
-    PAGE_W, PAGE_H = A4
-    header_y = _w_header_footer(c, kw_label, 1)
 
-    num_right_x = PAGE_W - W_MARGIN_R - 60 * mm
-    line_end_x = PAGE_W - W_MARGIN_R - 15 * mm
-    y = header_y - 15 * mm
+def create_wochenuebersicht_pdf(filename, kw_label, weekData, created_date=None):
+    c = canvas.Canvas(filename, pagesize=A4)
+    width, height = A4
 
-    total_weekday = 0.0; total_all = 0.0; sat = 0.0; sun = 0.0
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(20 * mm, height - 20 * mm, "Wochenübersicht")
+    c.setFont("Helvetica", 12)
+    c.drawRightString(width - 20 * mm, height - 20 * mm, kw_label)
 
-    def draw_num(text: str, bold=True):
-        c.setFont(W_FONT_BOLD if bold else W_FONT_REG, W_SIZE_TEXT)
-        c.drawRightString(num_right_x, y, text)
+    c.line(20 * mm, height - 22 * mm, width - 20 * mm, height - 22 * mm)
 
-    for day, hours, special in week_data:
-        c.setFont(W_FONT_REG, W_SIZE_TEXT)
-        c.drawString(W_MARGIN_L + W_BLOCK_SHIFT_X, y, f"{day}:")
+    total_weekday = 0.0
+    total_all = 0.0
+    sat = 0.0
+    sun = 0.0
+
+    y = height - 40 * mm
+
+    for item in weekData:
+        day = item["day"]
+        day_name = WOCHENTAGE_KURZ_DE.get(day, day)
+        hours = item.get("hours")
+        special = item.get("special")
+
+        c.setFont("Helvetica", 11)
+        c.drawString(30 * mm, y, f"{day_name}:")
+
         if special in ("Urlaub", "Krank", "Feiertag"):
-            draw_num("8,0 Std.")
-            c.setFont(W_FONT_REG, W_SIZE_TEXT)
-            c.drawRightString(line_end_x, y, f"({special})")
-            if day in DAY_ORDER[:5]: total_weekday += 8.0
+            c.drawRightString(width - 40 * mm, y, "8,0 Std.")
+            c.drawRightString(width - 20 * mm, y, f"({special})")
+            if day in ["Mo", "Di", "Mi", "Do", "Fr"]:
+                total_weekday += 8.0
             total_all += 8.0
+        elif hours:
+            c.drawRightString(width - 40 * mm, y, f"{hours:.1f} Std.")
+            if day in ["Mo", "Di", "Mi", "Do", "Fr"]:
+                total_weekday += hours
+            if day == "Sa":
+                sat = hours
+            elif day == "So":
+                sun = hours
+            total_all += hours
         else:
-            if hours and hours > 0:
-                draw_num(f"{hours:.1f} Std.")
-                if day in DAY_ORDER[:5]: total_weekday += hours
-                total_all += hours
-            else:
-                c.setFont(W_FONT_REG, W_SIZE_TEXT)
-                c.drawRightString(num_right_x, y, "–")
-        if day == "Sa": sat = hours or 0.0
-        if day == "So": sun = hours or 0.0
+            c.drawRightString(width - 40 * mm, y, "–")
+
         y -= 8 * mm
 
-    overtime = total_weekday - W_WEEKLY_TARGET
-    line_y = y + 4 * mm
-    c.setLineWidth(W_LINE_THICK)
-    c.line(W_MARGIN_L + W_BLOCK_SHIFT_X, line_y, line_end_x, line_y)
+    overtime = total_weekday - 40.0
 
-    y -= 3 * mm
-    c.setFont(W_FONT_REG, W_SIZE_TEXT); c.drawString(W_MARGIN_L + W_BLOCK_SHIFT_X, y, "Gesamt (Mo–Fr):"); draw_num(f"{total_weekday:.1f} Std.")
+    y -= 5 * mm
+    c.line(30 * mm, y, width - 20 * mm, y)
+
+    y -= 10 * mm
+    c.setFont("Helvetica", 11)
+    c.drawString(30 * mm, y, "Gesamt (Mo–Fr):")
+    c.drawRightString(width - 40 * mm, y, f"{total_weekday:.1f} Std.")
+
     y -= 8 * mm
-    c.drawString(W_MARGIN_L + W_BLOCK_SHIFT_X, y, "Überstunden (Mo–Fr):"); draw_num(f"{overtime:+.1f} Std.")
-    c.setFont(W_FONT_REG, W_SIZE_TEXT); c.drawRightString(line_end_x, y, "(Basis 40,0 Std./Woche)")
+    c.drawString(30 * mm, y, "Überstunden (Mo–Fr):")
+    c.drawRightString(width - 40 * mm, y, f"{overtime:+.1f} Std.")
+    c.drawRightString(width - 20 * mm, y, "(Basis 40,0 Std./Woche)")
 
-    if sat > 0: y -= 8 * mm; c.setFont(W_FONT_REG, W_SIZE_TEXT); c.drawString(W_MARGIN_L + W_BLOCK_SHIFT_X, y, "Samstagsarbeit:"); draw_num(f"{sat:.1f} Std.")
-    if sun > 0: y -= 8 * mm; c.setFont(W_FONT_REG, W_SIZE_TEXT); c.drawString(W_MARGIN_L + W_BLOCK_SHIFT_X, y, "Sonntagsarbeit:"); draw_num(f"{sun:.1f} Std.")
+    if sat > 0:
+        y -= 8 * mm
+        c.drawString(30 * mm, y, "Samstagsstunden:")
+        c.drawRightString(width - 40 * mm, y, f"{sat:.1f} Std.")
 
-    y -= 8 * mm; c.setFont(W_FONT_REG, W_SIZE_TEXT); c.drawString(W_MARGIN_L + W_BLOCK_SHIFT_X, y, "Gesamt (Mo–So):"); draw_num(f"{total_all:.1f} Std.")
-    c.setLineWidth(W_LINE_THICK); c.line(W_MARGIN_L + W_BLOCK_SHIFT_X, y - 8 * mm, line_end_x, y - 8 * mm)
-    c.setFont(W_FONT_REG, W_SIZE_TEXT); c.drawRightString(line_end_x, y - 12 * mm, (created_date or datetime.now()).strftime("Erstellt am: %d.%m.%Y"))
-    c.save()
-    return path
+    if sun > 0:
+        y -= 8 * mm
+        c.drawString(30 * mm, y, "Sonntagsstunden:")
+        c.drawRightString(width - 40 * mm, y, f"{sun:.1f} Std.")
 
-def generate_gesamt(path: str, datum: datetime, start: str, stop: str, pause: float,
-                    taetigkeiten: List[str], week_data: List[Tuple[str, float|None, SpecialT]],
-                    kw_label: str | None) -> str:
-    c = canvas.Canvas(path, pagesize=A4)
-    # Seite 1: Tagesblatt
-    tmp1 = path + ".tmp1.pdf"; tmp2 = path + ".tmp2.pdf"
-    generate_tagesblatt(tmp1, datum, start, stop, pause, taetigkeiten, kw_label)
-    generate_woche(tmp2, kw_label or _format_kw(datum), week_data)
-    # beide Seiten in ein Dokument kopieren
-    # einfacher Weg: neu zeichnen – oder ReportLab Page merging (komplizierter).
-    # Wir zeichnen neu (kleinster Code): je Funktion direkt auf c wäre umfangreicher.
-    # -> Workaround: Wir generieren beide separat und senden zuerst Seite 1 dann 2 per drawImage.
-    from reportlab.lib.utils import ImageReader
-    # Rendern als Raster wäre schlechter. Deshalb machen wir es einfacher:
-    # Wir öffnen zwei Canvas nacheinander:
-    # Stattdessen nutzen wir direkten Neuaufbau (kurz) – hier: Seite 1 nochmal zeichnen:
-    os.remove(tmp1); os.remove(tmp2)  # wir bleiben bei 1-Seite-pro-Endpunkt – combine ist optional
-    # In dieser Minimalversion erzeugen wir einfach nur Seite 1+2 nacheinander erneut:
-    generate_tagesblatt(path, datum, start, stop, pause, taetigkeiten, kw_label)
+    y -= 8 * mm
+    c.drawString(30 * mm, y, "Gesamt (Mo–So):")
+    c.drawRightString(width - 40 * mm, y, f"{total_all:.1f} Std.")
+
+    c.setFont("Helvetica", 9)
+    c.drawString(20 * mm, 15 * mm, "Seite 1")
+    if created_date:
+        created_str = created_date.strftime("Erstellt am: %d.%m.%Y")
+        c.drawRightString(width - 20 * mm, 15 * mm, created_str)
+    else:
+        c.drawRightString(width - 20 * mm, 15 * mm, "(c)2025 – Arbeitstagebuch_UM")
+
     c.showPage()
-    # zweite Seite direkt zeichnen:
-    os.remove(path)  # entfernen, weil generate_woche schreibt neu – wir zeichnen direkt:
-    # Für Kürze: wir erzeugen hier statt echter Kombi vorerst nur Tagesblatt ODER Woche.
-    # -> Einfacher: Kombi liefern wir als zwei einzelne Dateien. (Siehe Endpunkte unten)
-    return path  # (Kombi-Funktion nicht genutzt in dieser minimalen Server-Variante)
+    c.save()
 
-# ======= Flask App =======
-app = Flask(__name__)
-API_KEY = os.environ.get("ATB_API_KEY", "change-me")
-OUT_DIR = "/tmp/pdf"
-os.makedirs(OUT_DIR, exist_ok=True)
 
-def auth_ok(req) -> bool:
-    auth = req.headers.get("Authorization", "")
-    return auth.startswith("Bearer ") and auth.split(" ", 1)[1] == API_KEY
+@app.route("/tagesblatt", methods=["POST"])
+def tagesblatt():
+    if not auth_ok(request):
+        return "Unauthorized", 401
 
-@app.get("/")
-def root():
-    return "OK", 200
+    data = request.json
+    datum = data["datum"]
+    start = data["start"]
+    stop = data["stop"]
+    pause = data.get("pause", 0.5)
+    taetigkeiten = data.get("taetigkeiten", [])
+    kw_label = data.get("kwLabel", "")
 
-@app.get("/files/<name>")
-def serve_file(name: str):
-    path = os.path.join(OUT_DIR, name)
-    if not os.path.isfile(path): return ("Not found", 404)
-    return send_file(path, mimetype="application/pdf")
+    fmt = "%H:%M Uhr"
+    start_dt = datetime.datetime.strptime(start, fmt)
+    stop_dt = datetime.datetime.strptime(stop, fmt)
 
-# ---- Actions ----
-@app.post("/tagesblatt")
-def api_tagesblatt():
-    if not auth_ok(request): return ("Unauthorized", 401)
-    p = request.get_json(force=True)
-    datum = datetime.fromisoformat(p["datum"])
+    arbeitszeit = (stop_dt - start_dt).total_seconds() / 3600 - pause
+    gesamtzeit = (stop_dt - start_dt).total_seconds() / 3600
+
     file_id = f"tagesblatt_{uuid.uuid4().hex}.pdf"
-    path = os.path.join(OUT_DIR, file_id)
-    generate_tagesblatt(
-        path,
-        datum=datum,
-        start=p["start"],
-        stop=p["stop"],
-        pause=float(p.get("pause", 0.5)),
-        taetigkeiten=p.get("taetigkeiten", []),
-        kw_label=p.get("kwLabel"),
-    )
-    url = request.host_url.rstrip("/") + url_for("serve_file", name=file_id)
+    filepath = os.path.join(OUTPUT_DIR, file_id)
+    create_tagesblatt_pdf(filepath, datum, start, stop, pause, arbeitszeit, gesamtzeit, taetigkeiten, kw_label)
+
+    url = request.url_root.replace("http://", "https://").rstrip("/") + url_for("serve_file", name=file_id)
     return jsonify({"url": url})
 
-@app.post("/woche")
-def api_woche():
-    if not auth_ok(request): return ("Unauthorized", 401)
-    p = request.get_json(force=True)
-    weekData = p["weekData"]  # [{day,hours?,special?}, ...] sieben Einträge
-    data: List[Tuple[str, float|None, SpecialT]] = []
-    for item in weekData:
-        data.append((item["day"], item.get("hours"), item.get("special")))
+
+@app.route("/woche", methods=["POST"])
+def woche():
+    if not auth_ok(request):
+        return "Unauthorized", 401
+
+    data = request.json
+    kw_label = data["kwLabel"]
+    weekData = data["weekData"]
+    created_date = datetime.datetime.now()
+
     file_id = f"woche_{uuid.uuid4().hex}.pdf"
-    path = os.path.join(OUT_DIR, file_id)
-    generate_woche(path, kw_label=p.get("kwLabel","KW ?"), week_data=data,
-                   created_date=datetime.fromisoformat(p["createdDate"]) if p.get("createdDate") else None)
-    url = request.host_url.rstrip("/") + url_for("serve_file", name=file_id)
+    filepath = os.path.join(OUTPUT_DIR, file_id)
+    create_wochenuebersicht_pdf(filepath, kw_label, weekData, created_date)
+
+    url = request.url_root.replace("http://", "https://").rstrip("/") + url_for("serve_file", name=file_id)
     return jsonify({"url": url})
 
-@app.post("/gesamt")
-def api_gesamt():
-    if not auth_ok(request): return ("Unauthorized", 401)
-    # Fürs Erste liefern wir 2 URLs (Tagesblatt + Woche), damit du sofort arbeiten kannst.
-    # (Eine echte 2-seitige Kombi können wir danach ergänzen.)
-    p = request.get_json(force=True)
-    # 1) Tagesblatt
-    datum = datetime.fromisoformat(p["datum"])
-    tb_id = f"tagesblatt_{uuid.uuid4().hex}.pdf"
-    tb_path = os.path.join(OUT_DIR, tb_id)
-    generate_tagesblatt(tb_path, datum, p["start"], p["stop"], float(p.get("pause",0.5)), p.get("taetigkeiten", []), p.get("kwLabel"))
-    tb_url = request.host_url.rstrip("/") + url_for("serve_file", name=tb_id)
-    # 2) Woche
-    weekData = p["weekData"]
-    data: List[Tuple[str, float|None, SpecialT]] = []
-    for item in weekData:
-        data.append((item["day"], item.get("hours"), item.get("special")))
-    w_id = f"woche_{uuid.uuid4().hex}.pdf"
-    w_path = os.path.join(OUT_DIR, w_id)
-    generate_woche(w_path, kw_label=p.get("kwLabel", _format_kw(datum)), week_data=data)
-    w_url = request.host_url.rstrip("/") + url_for("serve_file", name=w_id)
-    return jsonify({"urls": {"tagesblatt": tb_url, "woche": w_url}})
+
+@app.route("/gesamt", methods=["POST"])
+def gesamt():
+    if not auth_ok(request):
+        return "Unauthorized", 401
+
+    data = request.json
+    datum = data["datum"]
+    start = data["start"]
+    stop = data["stop"]
+    pause = data.get("pause", 0.5)
+    taetigkeiten = data.get("taetigkeiten", [])
+    kw_label = data.get("kwLabel", "")
+
+    fmt = "%H:%M Uhr"
+    start_dt = datetime.datetime.strptime(start, fmt)
+    stop_dt = datetime.datetime.strptime(stop, fmt)
+    arbeitszeit = (stop_dt - start_dt).total_seconds() / 3600 - pause
+    gesamtzeit = (stop_dt - start_dt).total_seconds() / 3600
+
+    file_id_t = f"tagesblatt_{uuid.uuid4().hex}.pdf"
+    filepath_t = os.path.join(OUTPUT_DIR, file_id_t)
+    create_tagesblatt_pdf(filepath_t, datum, start, stop, pause, arbeitszeit, gesamtzeit, taetigkeiten, kw_label)
+
+    url_t = request.url_root.replace("http://", "https://").rstrip("/") + url_for("serve_file", name=file_id_t)
+
+    weekData = data["weekData"]
+    file_id_w = f"woche_{uuid.uuid4().hex}.pdf"
+    filepath_w = os.path.join(OUTPUT_DIR, file_id_w)
+    create_wochenuebersicht_pdf(filepath_w, kw_label, weekData, datetime.datetime.now())
+
+    url_w = request.url_root.replace("http://", "https://").rstrip("/") + url_for("serve_file", name=file_id_w)
+
+    return jsonify({"urls": {"tagesblatt": url_t, "woche": url_w}})
+
+
+@app.route("/files/<name>")
+def serve_file(name):
+    return send_from_directory(OUTPUT_DIR, name)
+
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    app.run(host="0.0.0.0", port=5000)
