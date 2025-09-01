@@ -1,3 +1,11 @@
+from flask import Flask, request, jsonify, send_from_directory
+import os
+from arbeitstagebuch_standard_python_skripte_tagesblatt_wochenubersicht import (
+    generate_tagesblatt,
+    generate_wochenuebersicht,
+    generate_gesamt
+)
+
 import os
 from flask import Flask, request, jsonify
 from datetime import datetime
