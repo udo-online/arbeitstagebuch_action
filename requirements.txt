@@ -1,2 +1,11 @@
 Flask==3.0.2
 reportlab==3.6.13
+
+Flask
+reportlab
+pydrive2
+google-api-python-client
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+
