@@ -19,27 +19,43 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 def init_drive():
     """
     Initialisiert Google Drive mit den Zugangsdaten.
-    - Lokal: nimmt die JSON-Datei im Projektordner
-    - Render: nimmt die Secret-Datei unter /etc/secrets/arbeitstagebuch-key.json
+    - Render: nimmt Secret File unter /etc/secrets/arbeitstagebuch-key.json
+    - Lokal: nimmt JSON-Datei im Projektordner
+    - Fallback: GOOGLE_SERVICE_ACCOUNT Environment Variable
     """
-    service_account_file = "/etc/secrets/arbeitstagebuch-key.json"
-    if not os.path.exists(service_account_file):
-        service_account_file = "arbeitstagebuch-470720-a7eb9b20a922.json"  # Lokale Datei
-
     scope = ['https://www.googleapis.com/auth/drive.file']
-    credentials = ServiceAccountCredentials.from_json_keyfile_name(service_account_file, scope)
+    creds = None
+
+    # 1. Render Secret File
+    secret_path = "/etc/secrets/arbeitstagebuch-key.json"
+    if os.path.exists(secret_path):
+        creds = ServiceAccountCredentials.from_json_keyfile_name(secret_path, scope)
+        print("✅ Google Drive: Secret File verwendet")
+
+    # 2. Lokale Datei
+    elif os.path.exists("arbeitstagebuch-470720-a7eb9b20a922.json"):
+        creds = ServiceAccountCredentials.from_json_keyfile_name(
+            "arbeitstagebuch-470720-a7eb9b20a922.json", scope
+        )
+        print("✅ Google Drive: Lokale JSON-Datei verwendet")
+
+    # 3. Environment Variable
+    else:
+        service_json = os.getenv("GOOGLE_SERVICE_ACCOUNT")
+        if not service_json:
+            raise RuntimeError("❌ Keine Google Drive Credentials gefunden!")
+        creds_dict = json.loads(service_json)
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        print("✅ Google Drive: Environment Variable verwendet")
 
     gauth = GoogleAuth()
-    gauth.credentials = credentials
+    gauth.credentials = creds
     return GoogleDrive(gauth)
 
 
 def upload_to_drive(local_path: str, filename: str, folder_id: str = None):
     """
     Lädt eine Datei nach Google Drive hoch.
-    :param local_path: Lokaler Pfad der Datei
-    :param filename: Dateiname, der in Google Drive erscheinen soll
-    :param folder_id: Google Drive Ordner-ID
     """
     drive = init_drive()
     gfile = drive.CreateFile(
@@ -48,7 +64,7 @@ def upload_to_drive(local_path: str, filename: str, folder_id: str = None):
     gfile.SetContentFile(local_path)
     gfile.Upload()
     print(f"✅ Datei {filename} erfolgreich nach Google Drive hochgeladen")
-    return gfile['id']  # gibt die Google Drive File-ID zurück
+    return gfile['id']
 
 
 # ---------------- PDF Generator ---------------- #
@@ -91,7 +107,7 @@ def create_tagesblatt(data):
     c.save()
 
     # Google Drive Upload
-    folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")  # hier Ordner-ID aus Environment
+    folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")  # Ordner-ID aus Environment
     if folder_id:
         upload_to_drive(pdf_path, pdf_filename, folder_id)
 
@@ -106,6 +122,7 @@ def tagesblatt():
         pdf_path = create_tagesblatt(data)
         return jsonify({"url": f"/{pdf_path}"})
     except Exception as e:
+        print(f"❌ Fehler: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -116,5 +133,5 @@ def root():
 
 # ---------------- Start ---------------- #
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))  # Render setzt PORT selbst
+    port = int(os.environ.get("PORT", 5000))  # Render nutzt eigenen Port
     app.run(host="0.0.0.0", port=port)
