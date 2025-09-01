@@ -1,104 +1,73 @@
 import os
-import uuid
-from flask import Flask, request, jsonify, send_from_directory
-from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, ListFlowable, ListItem
-from reportlab.lib.styles import getSampleStyleSheet
+from flask import Flask, request, jsonify
+from datetime import datetime
+from arbeitstagebuch_standard_python_skripte_tagesblatt_wochenubersicht import (
+    create_tagesblatt_pdf,
+    create_wochen_pdf,
+)
 
+# Flask App
 app = Flask(__name__)
 
 # Speicherordner für PDFs
-FILES_DIR = "files"
-os.makedirs(FILES_DIR, exist_ok=True)
+OUTPUT_DIR = "files"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# ---- PDF Generator ----
-def create_pdf(datum, start, stop, pause, taetigkeiten, filename):
-    doc = SimpleDocTemplate(filename, pagesize=A4)
-    styles = getSampleStyleSheet()
-    story = []
 
-    # Titel
-    story.append(Paragraph(f"Tagesblatt für {datum}", styles["Heading1"]))
-    story.append(Spacer(1, 12))
+# ---------------- API Endpunkte ---------------- #
 
-    # Arbeitszeiten
-    story.append(Paragraph(f"Start: {start}", styles["Normal"]))
-    story.append(Paragraph(f"Stop: {stop}", styles["Normal"]))
-    story.append(Paragraph(f"Pause: {pause}h", styles["Normal"]))
-    story.append(Spacer(1, 12))
-
-    # Tätigkeiten
-    story.append(Paragraph("Tätigkeiten:", styles["Heading2"]))
-    story.append(Spacer(1, 6))
-
-    items = [ListItem(Paragraph(f"- {t}", styles["Normal"])) for t in taetigkeiten]
-    story.append(ListFlowable(items, bulletType="bullet", leftIndent=20))
-
-    doc.build(story)
-
-# ---- Endpoint Tagesblatt ----
 @app.route("/tagesblatt", methods=["POST"])
 def tagesblatt():
-    data = request.get_json()
-    if not data:
-        return jsonify({"error": "Kein JSON erhalten"}), 400
+    """
+    Erzeugt ein Tagesblatt-PDF (lokal gespeichert).
+    """
+    try:
+        data = request.json
+        datum = data.get("datum", datetime.today().strftime("%Y-%m-%d"))
 
-    datum = data.get("datum")
-    start = data.get("start")
-    stop = data.get("stop")
-    pause = data.get("pause", 0.5)
-    taetigkeiten = data.get("taetigkeiten", [])
+        pdf_filename = f"tagesblatt_{datum}.pdf"
+        pdf_path = os.path.join(OUTPUT_DIR, pdf_filename)
 
-    if not datum or not start or not stop:
-        return jsonify({"error": "Datum, Start und Stop sind erforderlich"}), 400
+        # PDF erzeugen
+        create_tagesblatt_pdf(data, pdf_path)
 
-    filename = f"tagesblatt_{uuid.uuid4().hex[:8]}.pdf"
-    filepath = os.path.join(FILES_DIR, filename)
+        return jsonify({
+            "download_url": f"http://arbeitstagebuch-action.onrender.com/{pdf_path}",
+            "local_path": pdf_path
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-    create_pdf(datum, start, stop, pause, taetigkeiten, filepath)
 
-    file_url = f"https://arbeitstagebuch-action.onrender.com/files/{filename}"
-    return jsonify({"url": file_url})
+@app.route("/wochen", methods=["POST"])
+def wochen():
+    """
+    Erzeugt eine Wochenübersicht-PDF (lokal gespeichert).
+    """
+    try:
+        data = request.json
+        kw_label = data.get("kwLabel", "KW_unbekannt")
 
-# ---- Endpoint Wochenübersicht ----
-@app.route("/woche", methods=["POST"])
-def woche():
-    data = request.get_json()
-    if not data:
-        return jsonify({"error": "Kein JSON erhalten"}), 400
+        pdf_filename = f"wochen_{kw_label}.pdf"
+        pdf_path = os.path.join(OUTPUT_DIR, pdf_filename)
 
-    kw_label = data.get("kwLabel", "KW")
-    week_data = data.get("weekData", [])
+        # PDF erzeugen
+        create_wochen_pdf(data, pdf_path)
 
-    if not week_data:
-        return jsonify({"error": "weekData erforderlich"}), 400
+        return jsonify({
+            "download_url": f"http://arbeitstagebuch-action.onrender.com/{pdf_path}",
+            "local_path": pdf_path
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-    filename = f"wochenbericht_{uuid.uuid4().hex[:8]}.pdf"
-    filepath = os.path.join(FILES_DIR, filename)
 
-    doc = SimpleDocTemplate(filepath, pagesize=A4)
-    styles = getSampleStyleSheet()
-    story = []
+@app.route("/")
+def root():
+    return "Arbeitstagebuch API läuft 🚀"
 
-    story.append(Paragraph(f"Woche: {kw_label}", styles["Heading1"]))
-    story.append(Spacer(1, 12))
 
-    for day in week_data:
-        line = f"{day.get('day')}: {day.get('hours', 0)} Stunden"
-        if "special" in day:
-            line += f" ({day['special']})"
-        story.append(Paragraph(line, styles["Normal"]))
-
-    doc.build(story)
-
-    file_url = f"https://arbeitstagebuch-action.onrender.com/files/{filename}"
-    return jsonify({"url": file_url})
-
-# ---- Dateien ausliefern ----
-@app.route("/files/<path:filename>", methods=["GET"])
-def serve_file(filename):
-    return send_from_directory(FILES_DIR, filename)
-
-# ---- Start ----
+# ---------------- Start ---------------- #
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
