@@ -65,7 +65,7 @@ def tagesblatt():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# 📂 PDF Download-Endpunkt (Fix für iPhone, Safari usw.)
+# 📂 PDF Download-Endpunkt
 @app.route("/files/<path:filename>")
 def download_file(filename):
     """
