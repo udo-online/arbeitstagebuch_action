@@ -37,9 +37,8 @@ def init_drive():
 def upload_to_drive(local_path: str, filename: str, folder_id: str = None):
     """
     Lädt eine Datei nach Google Drive hoch.
-    :param local_path: Lokaler Pfad der Datei
-    :param filename: Dateiname, der in Google Drive erscheinen soll
-    :param folder_id: Google Drive Ordner-ID (optional, wenn None → Environment Variable wird genutzt)
+    Wichtig: Service Accounts haben kein eigenes „My Drive“-Quota,
+    deshalb MUSS immer ein Ziel-Ordner (parents) angegeben werden.
     """
     drive = init_drive()
 
@@ -49,15 +48,18 @@ def upload_to_drive(local_path: str, filename: str, folder_id: str = None):
     if not folder_id:
         raise RuntimeError("GOOGLE_DRIVE_FOLDER_ID ist nicht gesetzt!")
 
-    gfile = drive.CreateFile({
+    # Metadaten inkl. Eltern-Ordner setzen
+    metadata = {
         "title": filename,
         "parents": [{"id": folder_id}]
-    })
+    }
+
+    gfile = drive.CreateFile(metadata)
     gfile.SetContentFile(local_path)
     gfile.Upload()
+
     print(f"✅ Datei {filename} erfolgreich nach Google Drive hochgeladen in Ordner {folder_id}")
     return gfile['id']
-
 
 
 # ---------------- PDF Generator ---------------- #
