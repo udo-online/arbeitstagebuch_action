@@ -4,8 +4,10 @@ from flask import Flask, request, jsonify
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from datetime import datetime
-from pydrive2.auth import GoogleAuth
-from pydrive2.drive import GoogleDrive
+
+# Google API
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 from oauth2client.service_account import ServiceAccountCredentials
 
 # Flask App
@@ -15,54 +17,48 @@ app = Flask(__name__)
 OUTPUT_DIR = "files"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# ---------------- Google Drive Setup ---------------- #
-def init_drive():
-    """
-    Initialisiert Google Drive mit den Zugangsdaten.
-    - Lokal: nimmt die JSON-Datei im Projektordner
-    - Render: nimmt die Secret-Datei unter /etc/secrets/arbeitstagebuch-key.json
-    """
-    service_account_file = "/etc/secrets/arbeitstagebuch-key.json"
-    if not os.path.exists(service_account_file):
-        service_account_file = "arbeitstagebuch-470720-a7eb9b20a922.json"  # Lokale Datei
 
-    scope = ['https://www.googleapis.com/auth/drive.file']
-    credentials = ServiceAccountCredentials.from_json_keyfile_name(service_account_file, scope)
-
-    gauth = GoogleAuth()
-    gauth.credentials = credentials
-    return GoogleDrive(gauth)
-
-
+# ---------------- Google Drive Upload (v3) ---------------- #
 def upload_to_drive(local_path: str, filename: str, folder_id: str = None):
     """
-    Lädt eine Datei nach Google Drive hoch.
-    :param local_path: Lokaler Pfad der Datei
-    :param filename: Dateiname, der in Google Drive erscheinen soll
-    :param folder_id: Google Drive Ordner-ID
+    Lädt eine Datei in Google Drive (API v3, unterstützt Shared Drives).
     """
-    drive = init_drive()
+    # Service Account JSON aus Render Environment laden
+    service_account_info = json.loads(os.getenv("GOOGLE_SERVICE_ACCOUNT"))
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(
+        service_account_info,
+        scopes=['https://www.googleapis.com/auth/drive.file']
+    )
 
-    # Ordner-ID aus Env holen, falls nicht übergeben
-    if folder_id is None:
-        folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
+    # Drive v3 Client
+    service = build('drive', 'v3', credentials=creds)
 
+    # Ordner-ID aus Env, falls nicht übergeben
     if not folder_id:
-        raise RuntimeError("GOOGLE_DRIVE_FOLDER_ID ist nicht gesetzt!")
+        folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
+    if not folder_id:
+        raise RuntimeError("GOOGLE_DRIVE_FOLDER_ID nicht gesetzt!")
 
-    print(f"🚀 Verwende Ordner-ID: {folder_id}")  # Debug-Ausgabe ins Render-Log
+    print(f"🚀 Verwende Ordner-ID: {folder_id}")
 
-    metadata = {
-        "title": filename,
-        "parents": [{"id": folder_id}]
+    # Datei-Metadaten
+    file_metadata = {
+        'name': filename,
+        'parents': [folder_id]
     }
+    media = MediaFileUpload(local_path, mimetype='application/pdf')
 
-    gfile = drive.CreateFile(metadata)
-    gfile.SetContentFile(local_path)
-    gfile.Upload()
+    # Upload mit supportsAllDrives=True
+    uploaded_file = service.files().create(
+        body=file_metadata,
+        media_body=media,
+        fields='id',
+        supportsAllDrives=True
+    ).execute()
 
-    print(f"✅ Datei {filename} erfolgreich nach Google Drive hochgeladen in Ordner {folder_id}")
-    return gfile['id']
+    file_id = uploaded_file.get('id')
+    print(f"✅ Datei {filename} hochgeladen nach Drive mit ID {file_id}")
+    return file_id
 
 
 # ---------------- PDF Generator ---------------- #
@@ -105,11 +101,14 @@ def create_tagesblatt(data):
     c.save()
 
     # Google Drive Upload
-    folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")  # Ordner-ID aus Environment
-    if folder_id:
-        upload_to_drive(pdf_path, pdf_filename, folder_id)
+    folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
+    file_id = upload_to_drive(pdf_path, pdf_filename, folder_id)
 
-    return pdf_path
+    return {
+        "local_path": pdf_path,
+        "drive_file_id": file_id,
+        "drive_link": f"https://drive.google.com/file/d/{file_id}/view?usp=sharing"
+    }
 
 
 # ---------------- API Endpunkte ---------------- #
@@ -117,10 +116,9 @@ def create_tagesblatt(data):
 def tagesblatt():
     data = request.json
     try:
-        pdf_path = create_tagesblatt(data)
-        return jsonify({"url": f"/{pdf_path}"})
+        result = create_tagesblatt(data)
+        return jsonify(result)
     except Exception as e:
-        print(f"❌ Fehler: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -131,5 +129,5 @@ def root():
 
 # ---------------- Start ---------------- #
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))  # Render nutzt eigenen Port
+    port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
