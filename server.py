@@ -1,71 +1,39 @@
-from flask import Flask, request, jsonify, send_from_directory
-import os
-from arbeitstagebuch_standard_python_skripte_tagesblatt_wochenubersicht import (
-    generate_tagesblatt,
-    generate_wochenuebersicht,
-    generate_gesamt
-)
-
 import os
 from flask import Flask, request, jsonify
-from datetime import datetime
 from arbeitstagebuch_standard_python_skripte_tagesblatt_wochenubersicht import (
-    create_tagesblatt_pdf,
-    create_wochen_pdf,
+    generate_tagesblatt,
+    generate_wochenuebersicht
 )
 
 # Flask App
 app = Flask(__name__)
 
-# Speicherordner für PDFs
-OUTPUT_DIR = "files"
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-
 # ---------------- API Endpunkte ---------------- #
-
 @app.route("/tagesblatt", methods=["POST"])
 def tagesblatt():
-    """
-    Erzeugt ein Tagesblatt-PDF (lokal gespeichert).
-    """
+    data = request.json
     try:
-        data = request.json
-        datum = data.get("datum", datetime.today().strftime("%Y-%m-%d"))
-
-        pdf_filename = f"tagesblatt_{datum}.pdf"
-        pdf_path = os.path.join(OUTPUT_DIR, pdf_filename)
-
-        # PDF erzeugen
-        create_tagesblatt_pdf(data, pdf_path)
-
-        return jsonify({
-            "download_url": f"http://arbeitstagebuch-action.onrender.com/{pdf_path}",
-            "local_path": pdf_path
-        })
+        pdf_path = generate_tagesblatt(
+            datum=data.get("datum"),
+            start=data.get("start"),
+            stop=data.get("stop"),
+            pause=data.get("pause", 0.5),
+            taetigkeiten=data.get("taetigkeiten", [])
+        )
+        return jsonify({"url": f"/{pdf_path}", "local_path": pdf_path})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/wochen", methods=["POST"])
-def wochen():
-    """
-    Erzeugt eine Wochenübersicht-PDF (lokal gespeichert).
-    """
+@app.route("/wochenuebersicht", methods=["POST"])
+def wochenuebersicht():
+    data = request.json
     try:
-        data = request.json
-        kw_label = data.get("kwLabel", "KW_unbekannt")
-
-        pdf_filename = f"wochen_{kw_label}.pdf"
-        pdf_path = os.path.join(OUTPUT_DIR, pdf_filename)
-
-        # PDF erzeugen
-        create_wochen_pdf(data, pdf_path)
-
-        return jsonify({
-            "download_url": f"http://arbeitstagebuch-action.onrender.com/{pdf_path}",
-            "local_path": pdf_path
-        })
+        pdf_path = generate_wochenuebersicht(
+            kwLabel=data.get("kwLabel"),
+            weekData=data.get("weekData", [])
+        )
+        return jsonify({"url": f"/{pdf_path}", "local_path": pdf_path})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
