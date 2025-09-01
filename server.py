@@ -5,66 +5,18 @@ from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from datetime import datetime
 
-# Google API
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
-from oauth2client.service_account import ServiceAccountCredentials
-
 # Flask App
 app = Flask(__name__)
 
-# Speicherordner für PDFs
+# Speicherordner für PDFs (lokal im Container)
 OUTPUT_DIR = "files"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-
-# ---------------- Google Drive Upload (v3) ---------------- #
-def upload_to_drive(local_path: str, filename: str, folder_id: str = None):
-    """
-    Lädt eine Datei in Google Drive (API v3, unterstützt Shared Drives).
-    """
-    # Service Account JSON aus Render Environment laden
-    service_account_info = json.loads(os.getenv("GOOGLE_SERVICE_ACCOUNT"))
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(
-        service_account_info,
-        scopes=['https://www.googleapis.com/auth/drive.file']
-    )
-
-    # Drive v3 Client
-    service = build('drive', 'v3', credentials=creds)
-
-    # Ordner-ID aus Env, falls nicht übergeben
-    if not folder_id:
-        folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
-    if not folder_id:
-        raise RuntimeError("GOOGLE_DRIVE_FOLDER_ID nicht gesetzt!")
-
-    print(f"🚀 Verwende Ordner-ID: {folder_id}")
-
-    # Datei-Metadaten
-    file_metadata = {
-        'name': filename,
-        'parents': [folder_id]
-    }
-    media = MediaFileUpload(local_path, mimetype='application/pdf')
-
-    # Upload mit supportsAllDrives=True
-    uploaded_file = service.files().create(
-        body=file_metadata,
-        media_body=media,
-        fields='id',
-        supportsAllDrives=True
-    ).execute()
-
-    file_id = uploaded_file.get('id')
-    print(f"✅ Datei {filename} hochgeladen nach Drive mit ID {file_id}")
-    return file_id
 
 
 # ---------------- PDF Generator ---------------- #
 def create_tagesblatt(data):
     """
-    Erzeugt ein Tagesblatt-PDF und lädt es nach Google Drive hoch.
+    Erzeugt ein Tagesblatt-PDF und speichert es lokal im Ordner 'files'.
     """
     datum = data.get("datum", datetime.today().strftime("%Y-%m-%d"))
     start = data.get("start", "08:00 Uhr")
@@ -100,14 +52,9 @@ def create_tagesblatt(data):
 
     c.save()
 
-    # Google Drive Upload
-    folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
-    file_id = upload_to_drive(pdf_path, pdf_filename, folder_id)
-
     return {
         "local_path": pdf_path,
-        "drive_file_id": file_id,
-        "drive_link": f"https://drive.google.com/file/d/{file_id}/view?usp=sharing"
+        "download_url": f"/{pdf_path}"
     }
 
 
