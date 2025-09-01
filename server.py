@@ -1,6 +1,5 @@
 import os
-import json
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from datetime import datetime
@@ -8,10 +7,9 @@ from datetime import datetime
 # Flask App
 app = Flask(__name__)
 
-# Speicherordner für PDFs (lokal im Container)
+# Speicherordner für PDFs
 OUTPUT_DIR = "files"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-
 
 # ---------------- PDF Generator ---------------- #
 def create_tagesblatt(data):
@@ -52,27 +50,32 @@ def create_tagesblatt(data):
 
     c.save()
 
-    return {
-        "local_path": pdf_path,
-        "download_url": f"/{pdf_path}"
-    }
-
+    return pdf_filename, pdf_path
 
 # ---------------- API Endpunkte ---------------- #
 @app.route("/tagesblatt", methods=["POST"])
 def tagesblatt():
     data = request.json
     try:
-        result = create_tagesblatt(data)
-        return jsonify(result)
+        pdf_filename, pdf_path = create_tagesblatt(data)
+        return jsonify({
+            "local_path": pdf_path,
+            "download_url": f"/files/{pdf_filename}"
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# 📂 PDF Download-Endpunkt (Fix für iPhone, Safari usw.)
+@app.route("/files/<path:filename>")
+def download_file(filename):
+    """
+    Gibt gespeicherte PDFs aus dem 'files' Ordner zurück.
+    """
+    return send_from_directory(OUTPUT_DIR, filename, as_attachment=True)
 
 @app.route("/")
 def root():
     return "Arbeitstagebuch API läuft 🚀"
-
 
 # ---------------- Start ---------------- #
 if __name__ == "__main__":
