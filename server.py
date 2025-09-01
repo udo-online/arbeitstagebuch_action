@@ -34,15 +34,20 @@ def init_drive():
     return GoogleDrive(gauth)
 
 
-def upload_to_drive(local_path: str, filename: str):
+def upload_to_drive(local_path: str, filename: str, folder_id: str = None):
     """
-    Lädt eine Datei nach Google Drive in den freigegebenen Ordner 'ArbeitstagebuchPDFs'.
+    Lädt eine Datei nach Google Drive hoch.
+    :param local_path: Lokaler Pfad der Datei
+    :param filename: Dateiname, der in Google Drive erscheinen soll
+    :param folder_id: Google Drive Ordner-ID (optional, wenn None → Environment Variable wird genutzt)
     """
     drive = init_drive()
-    folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
+
+    if folder_id is None:
+        folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
 
     if not folder_id:
-        raise RuntimeError("GOOGLE_DRIVE_FOLDER_ID nicht gesetzt!")
+        raise RuntimeError("GOOGLE_DRIVE_FOLDER_ID ist nicht gesetzt!")
 
     gfile = drive.CreateFile({
         "title": filename,
@@ -52,6 +57,7 @@ def upload_to_drive(local_path: str, filename: str):
     gfile.Upload()
     print(f"✅ Datei {filename} erfolgreich nach Google Drive hochgeladen in Ordner {folder_id}")
     return gfile['id']
+
 
 
 # ---------------- PDF Generator ---------------- #
