@@ -116,5 +116,5 @@ def root():
 
 # ---------------- Start ---------------- #
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
-# redeploy trigger
+    port = int(os.environ.get("PORT", 5000))  # Render setzt PORT selbst
+    app.run(host="0.0.0.0", port=port)
