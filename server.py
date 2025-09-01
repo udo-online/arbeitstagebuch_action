@@ -35,13 +35,22 @@ def init_drive():
 
 
 def upload_to_drive(local_path: str, filename: str, folder_id: str = None):
+    """
+    Lädt eine Datei nach Google Drive hoch.
+    :param local_path: Lokaler Pfad der Datei
+    :param filename: Dateiname, der in Google Drive erscheinen soll
+    :param folder_id: Google Drive Ordner-ID
+    """
     drive = init_drive()
 
+    # Ordner-ID aus Env holen, falls nicht übergeben
     if folder_id is None:
         folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
 
     if not folder_id:
         raise RuntimeError("GOOGLE_DRIVE_FOLDER_ID ist nicht gesetzt!")
+
+    print(f"🚀 Verwende Ordner-ID: {folder_id}")  # Debug-Ausgabe ins Render-Log
 
     metadata = {
         "title": filename,
