@@ -35,11 +35,6 @@ def init_drive():
 
 
 def upload_to_drive(local_path: str, filename: str, folder_id: str = None):
-    """
-    Lädt eine Datei nach Google Drive hoch.
-    Wichtig: Service Accounts haben kein eigenes „My Drive“-Quota,
-    deshalb MUSS immer ein Ziel-Ordner (parents) angegeben werden.
-    """
     drive = init_drive()
 
     if folder_id is None:
@@ -48,7 +43,6 @@ def upload_to_drive(local_path: str, filename: str, folder_id: str = None):
     if not folder_id:
         raise RuntimeError("GOOGLE_DRIVE_FOLDER_ID ist nicht gesetzt!")
 
-    # Metadaten inkl. Eltern-Ordner setzen
     metadata = {
         "title": filename,
         "parents": [{"id": folder_id}]
