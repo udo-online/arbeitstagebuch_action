@@ -18,19 +18,21 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # ---------------- Google Drive Setup ---------------- #
 def init_drive():
     """
-    Initialisiert Google Drive mit den Zugangsdaten aus der Environment Variable GOOGLE_SERVICE_ACCOUNT.
+    Initialisiert Google Drive mit den Zugangsdaten.
+    - Lokal: nimmt die JSON-Datei im Projektordner
+    - Render: nimmt die Secret-Datei unter /etc/secrets/arbeitstagebuch-key.json
     """
-    service_json = os.getenv("GOOGLE_SERVICE_ACCOUNT")
-    if not service_json:
-        raise RuntimeError("Fehlende GOOGLE_SERVICE_ACCOUNT Variable auf Render")
+    service_account_file = "/etc/secrets/arbeitstagebuch-key.json"
+    if not os.path.exists(service_account_file):
+        service_account_file = "arbeitstagebuch-470720-a7eb9b20a922.json"  # Lokale Datei
 
-    creds_dict = json.loads(service_json)
     scope = ['https://www.googleapis.com/auth/drive.file']
-    credentials = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    credentials = ServiceAccountCredentials.from_json_keyfile_name(service_account_file, scope)
 
     gauth = GoogleAuth()
     gauth.credentials = credentials
     return GoogleDrive(gauth)
+
 
 def upload_to_drive(local_path: str, filename: str, folder_id: str = None):
     """
